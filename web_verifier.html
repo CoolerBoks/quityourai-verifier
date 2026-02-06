@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>QuitYourAI Forensic Verification Portal</title>
+
+<style>
+:root {
+    --bg: #020617;
+    --panel: #0f172a;
+    --accent: #22c55e;
+    --warn: #facc15;
+    --error: #ef4444;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.header {
+    padding: 28px 20px;
+    text-align: center;
+    border-bottom: 1px solid #1e293b;
+}
+
+.header h1 {
+    margin: 0;
+    font-size: 26px;
+    letter-spacing: 0.5px;
+}
+
+.header p {
+    margin-top: 8px;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.container {
+    max-width: 760px;
+    margin: 40px auto;
+    padding: 0 20px;
+}
+
+.card {
+    background: var(--panel);
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 0 40px rgba(0,0,0,0.4);
+}
+
+.section-title {
+    font-size: 18px;
+    margin-bottom: 12px;
+}
+
+input[type="file"],
+textarea {
+    width: 100%;
+    margin-top: 10px;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid #1e293b;
+    background: #020617;
+    color: var(--text);
+}
+
+textarea {
+    min-height: 120px;
+    resize: vertical;
+}
+
+button {
+    margin-top: 16px;
+    padding: 12px 18px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: black;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 15px;
+}
+
+button:hover {
+    filter: brightness(1.05);
+}
+
+.result {
+    margin-top: 20px;
+    padding: 16px;
+    border-radius: 12px;
+    font-weight: 600;
+}
+
+.valid { background: rgba(34,197,94,0.15); color: var(--accent); }
+.warn { background: rgba(250,204,21,0.15); color: var(--warn); }
+.invalid { background: rgba(239,68,68,0.15); color: var(--error); }
+
+.footer {
+    text-align: center;
+    margin: 60px 0 30px;
+    font-size: 13px;
+    color: var(--muted);
+}
+</style>
+</head>
+
+<body>
+
+<div class="header">
+    <h1>Forensic Verification Portal</h1>
+    <p>Independent cryptographic validation for QuitYourAI forensic reports</p>
+</div>
+
+<div class="container">
+    <div class="card">
+
+        <div class="section-title">1. Upload Signature File (.sig)</div>
+        <input type="file" id="sigFile" accept=".sig" />
+
+        <div class="section-title" style="margin-top:24px;">
+            2. Paste Deterministic Forensic Text
+        </div>
+        <textarea id="forensicText" placeholder="Paste ACC=..., PREC=..., AUC=..., etc."></textarea>
+
+        <button onclick="verify()">Verify Authenticity</button>
+
+        <div id="output" class="result" style="display:none;"></div>
+    </div>
+</div>
+
+<div class="footer">
+    QuitYourAI Forensic Verification • Public Independent Tool • SHA-256 + RSA Verification
+</div>
+
+<script>
+async function sha256(text) {
+    const data = new TextEncoder().encode(text);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function parseSig(text) {
+    const map = {};
+    text.split("\n").forEach(line => {
+        const parts = line.split("=");
+        if (parts.length === 2) {
+            map[parts[0].trim()] = parts[1].trim();
+        }
+    });
+    return map;
+}
+
+async function verify() {
+    const sigInput = document.getElementById("sigFile");
+    const forensicText = document.getElementById("forensicText").value.trim();
+    const output = document.getElementById("output");
+
+    if (!sigInput.files.length) {
+        show("Please upload a .sig file.", "warn");
+        return;
+    }
+
+    if (!forensicText) {
+        show("Please paste the deterministic forensic text.", "warn");
+        return;
+    }
+
+    const sigText = await sigInput.files[0].text();
+    const data = parseSig(sigText);
+
+    if (!data.SHA256 || !data.RSA_SIGNATURE || !data.PUBLIC_KEY) {
+        show("Invalid signature file format.", "invalid");
+        return;
+    }
+
+    const computedHash = await sha256(forensicText);
+
+    if (computedHash.toLowerCase() !== data.SHA256.toLowerCase()) {
+        show("Hash mismatch — forensic content may be altered.", "warn");
+        return;
+    }
+
+    try {
+        const publicKeyBytes = Uint8Array.from(atob(data.PUBLIC_KEY), c => c.charCodeAt(0));
+
+        const key = await crypto.subtle.importKey(
+            "spki",
+            publicKeyBytes,
+            { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+            false,
+            ["verify"]
+        );
+
+        const signatureBytes = Uint8Array.from(atob(data.RSA_SIGNATURE), c => c.charCodeAt(0));
+
+        const valid = await crypto.subtle.verify(
+            "RSASSA-PKCS1-v1_5",
+            key,
+            signatureBytes,
+            new TextEncoder().encode(forensicText)
+        );
+
+        if (valid) {
+            show("VALID — Cryptographic signature verified.", "valid");
+        } else {
+            show("Signature invalid — possible forgery.", "invalid");
+        }
+
+    } catch (e) {
+        show("Verification error: " + e.message, "invalid");
+    }
+}
+
+function show(message, type) {
+    const output = document.getElementById("output");
+    output.style.display = "block";
+    output.className = "result " + type;
+    output.textContent = message;
+}
+</script>
+
+</body>
+</html>
